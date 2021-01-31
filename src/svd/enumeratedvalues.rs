@@ -1,7 +1,6 @@
-use std::collections::HashMap;
-
 use crate::elementext::ElementExt;
-use xmltree::Element;
+use crate::NS;
+use minidom::Element;
 
 use crate::encode::Encode;
 use crate::error::*;
@@ -106,23 +105,22 @@ impl Parse for EnumeratedValues {
     type Error = anyhow::Error;
 
     fn parse(tree: &Element) -> Result<Self> {
-        assert_eq!(tree.name, "enumeratedValues");
+        assert_eq!(tree.name(), "enumeratedValues");
         EnumeratedValuesBuilder::default()
             .name(tree.get_child_text_opt("name")?)
             .usage(parse::optional::<Usage>("usage", tree)?)
-            .derived_from(tree.attributes.get("derivedFrom").map(|s| s.to_owned()))
+            .derived_from(tree.attr("derivedFrom").map(|s| s.to_owned()))
             .values({
                 let values: Result<Vec<_>, _> = tree
-                    .children
-                    .iter()
+                    .children()
                     .filter(|t| {
                         ["name", "headerEnumName", "usage"]
                             .iter()
-                            .all(|s| &t.name != s)
+                            .all(|s| &t.name() != s)
                     })
                     .enumerate()
                     .map(|(e, t)| {
-                        if t.name == "enumeratedValue" {
+                        if t.name() == "enumeratedValue" {
                             EnumeratedValue::parse(t)
                                 .with_context(|| format!("Parsing enumerated value #{}", e))
                         } else {
@@ -143,34 +141,25 @@ impl Encode for EnumeratedValues {
     type Error = anyhow::Error;
 
     fn encode(&self) -> Result<Element> {
-        let mut base = Element {
-            prefix: None,
-            namespace: None,
-            namespaces: None,
-            name: String::from("enumeratedValues"),
-            attributes: HashMap::new(),
-            children: Vec::new(),
-            text: None,
-        };
+        let mut e = Element::builder("enumeratedValues", NS);
 
         if let Some(d) = &self.name {
-            base.children.push(new_element("name", Some((*d).clone())));
+            e = e.append(new_element("name", Some((*d).clone())));
         };
 
         if let Some(v) = &self.usage {
-            base.children.push(v.encode()?);
+            e = e.append(v.encode()?);
         };
 
         if let Some(v) = &self.derived_from {
-            base.attributes
-                .insert(String::from("derivedFrom"), (*v).clone());
+            e = e.attr("derivedFrom", v);
         }
 
         for v in &self.values {
-            base.children.push(v.encode()?);
+            e = e.append(v.encode()?);
         }
 
-        Ok(base)
+        Ok(e.build())
     }
 }
 
@@ -181,9 +170,9 @@ mod tests {
 
     #[test]
     fn decode_encode() {
-        let example = String::from(
+        let example =
             "
-            <enumeratedValues derivedFrom=\"fake_derivation\">
+            <enumeratedValues xmlns=\"".to_string() + NS + "\" derivedFrom=\"fake_derivation\">
                 <enumeratedValue>
                     <name>WS0</name>
                     <description>Zero wait-states inserted in fetch or read transfers</description>
@@ -195,8 +184,7 @@ mod tests {
                     <value>0x00000001</value>
                 </enumeratedValue>
             </enumeratedValues>
-        ",
-        );
+        ";
 
         let expected = EnumeratedValuesBuilder::default()
             .derived_from(Some("fake_derivation".to_string()))
@@ -222,7 +210,7 @@ mod tests {
             .unwrap();
 
         // TODO: move to test! macro
-        let tree1 = Element::parse(example.as_bytes()).unwrap();
+        let tree1: Element = example.parse().unwrap();
 
         let parsed = EnumeratedValues::parse(&tree1).unwrap();
         assert_eq!(parsed, expected, "Parsing tree failed");
@@ -234,8 +222,12 @@ mod tests {
     #[test]
     fn valid_children() {
         fn parse(contents: String) -> Result<EnumeratedValues> {
-            let example = String::from("<enumeratedValues>") + &contents + "</enumeratedValues>";
-            let tree = Element::parse(example.as_bytes()).unwrap();
+            let example = "<enumeratedValues xmlns=\"".to_string()
+                + NS
+                + "\">"
+                + &contents
+                + "</enumeratedValues>";
+            let tree: Element = example.parse().unwrap();
             EnumeratedValues::parse(&tree)
         }
 

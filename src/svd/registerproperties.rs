@@ -1,4 +1,4 @@
-use xmltree::Element;
+use minidom::Element;
 
 use crate::encode::Encode;
 use crate::encode::EncodeChildren;
@@ -61,15 +61,15 @@ impl EncodeChildren for RegisterProperties {
         let mut children = Vec::new();
 
         if let Some(v) = &self.size {
-            children.push(new_element("size", Some(format!("0x{:08.x}", v))));
+            children.push(new_element("size", Some(format!("0x{:08.x}", v))).build());
         };
 
         if let Some(v) = &self.reset_value {
-            children.push(new_element("resetValue", Some(format!("0x{:08.x}", v))));
+            children.push(new_element("resetValue", Some(format!("0x{:08.x}", v))).build());
         };
 
         if let Some(v) = &self.reset_mask {
-            children.push(new_element("resetMask", Some(format!("0x{:08.x}", v))));
+            children.push(new_element("resetMask", Some(format!("0x{:08.x}", v))).build());
         };
 
         if let Some(v) = &self.access {
@@ -83,19 +83,21 @@ impl EncodeChildren for RegisterProperties {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NS;
 
     #[test]
     fn decode_encode() {
-        let example = String::from(
-            "
-            <mock>
+        let example = "
+            <mock xmlns=\""
+            .to_string()
+            + NS
+            + "\">
                 <size>0xaabbccdd</size>
                 <resetValue>0x11223344</resetValue>
                 <resetMask>0xffffffff</resetMask>
                 <access>read-only</access>
             </mock>
-        ",
-        );
+        ";
 
         let mut expected = RegisterProperties::default();
         expected.size = Some(0xaabbccdd);
@@ -103,13 +105,14 @@ mod tests {
         expected.reset_mask = Some(0xffffffff);
         expected.access = Some(Access::ReadOnly);
 
-        let tree1 = Element::parse(example.as_bytes()).unwrap();
+        let tree1: Element = example.parse().unwrap();
 
         let parsed = RegisterProperties::parse(&tree1).unwrap();
         assert_eq!(parsed, expected, "Parsing tree failed");
 
-        let mut tree2 = new_element("mock", None);
-        tree2.children = parsed.encode().unwrap();
+        let mut tree2 = Element::builder("mock", NS)
+            .append_all(parsed.encode().unwrap())
+            .build();
         assert_eq!(tree1, tree2, "Encoding value failed");
     }
 }

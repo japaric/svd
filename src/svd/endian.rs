@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
-use xmltree::Element;
+use crate::NS;
+use minidom::Element;
 
 use crate::elementext::ElementExt;
 use crate::encode::Encode;
@@ -45,15 +44,7 @@ impl Encode for Endian {
             Endian::Other => String::from("other"),
         };
 
-        Ok(Element {
-            prefix: None,
-            namespace: None,
-            namespaces: None,
-            name: String::from("endian"),
-            attributes: HashMap::new(),
-            children: Vec::new(),
-            text: Some(text),
-        })
+        Ok(Element::builder("endian", NS).append(text).build())
     }
 }
 
