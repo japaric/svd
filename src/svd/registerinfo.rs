@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::elementext::ElementExt;
 use xmltree::Element;
 
-use crate::encode::Encode;
+use crate::encode::{Encode, EncodeChildren};
 use crate::error::*;
 
 use crate::new_element;
@@ -23,8 +23,15 @@ pub struct RegisterInfo {
     /// Register names are required to be unique within the scope of a peripheral
     pub name: String,
 
-    /// Define the address offset relative to the enclosing element
-    pub address_offset: u32,
+    /// Specifies a register name without the restritions of an ANSIS C identifier.
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub display_name: Option<String>,
+
+    /// String describing the details of the register
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub description: Option<String>,
 
     /// Specifies a group name associated with all alternate register that have the same name
     #[cfg_attr(feature = "serde", serde(default))]
@@ -37,86 +44,64 @@ pub struct RegisterInfo {
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub alternate_register: Option<String>,
 
-    /// Specify the register name from which to inherit data.
-    /// Elements specified subsequently override inherited values
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub derived_from: Option<String>,
+    /// Define the address offset relative to the enclosing element
+    pub address_offset: u32,
 
-    /// String describing the details of the register
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub description: Option<String>,
+    /// Specifies register size, access permission and reset value
+    #[cfg_attr(feature = "serde", serde(flatten))]
+    pub properties: RegisterProperties,
 
+    /// Specifies the write side effects
     #[cfg_attr(feature = "serde", serde(default))]
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub display_name: Option<String>,
+    pub modified_write_values: Option<ModifiedWriteValues>,
 
+    /// Specifies the subset of allowed write values
     #[cfg_attr(feature = "serde", serde(default))]
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub size: Option<u32>,
-
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub access: Option<Access>,
-
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub reset_value: Option<u64>,
-
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub reset_mask: Option<u64>,
+    pub write_constraint: Option<WriteConstraint>,
 
     /// `None` indicates that the `<fields>` node is not present
     #[cfg_attr(feature = "serde", serde(default))]
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub fields: Option<Vec<Field>>,
 
+    /// Specify the register name from which to inherit data.
+    /// Elements specified subsequently override inherited values
     #[cfg_attr(feature = "serde", serde(default))]
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub write_constraint: Option<WriteConstraint>,
-
-    /// Element to describe the manipulation of data written to a register
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub modified_write_values: Option<ModifiedWriteValues>,
+    pub derived_from: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RegisterInfoBuilder {
     name: Option<String>,
-    address_offset: Option<u32>,
+    display_name: Option<String>,
+    description: Option<String>,
     alternate_group: Option<String>,
     alternate_register: Option<String>,
-    derived_from: Option<String>,
-    description: Option<String>,
-    display_name: Option<String>,
+    address_offset: Option<u32>,
     properties: RegisterProperties,
-    fields: Option<Vec<Field>>,
-    write_constraint: Option<WriteConstraint>,
     modified_write_values: Option<ModifiedWriteValues>,
+    write_constraint: Option<WriteConstraint>,
+    fields: Option<Vec<Field>>,
+    derived_from: Option<String>,
 }
 
 impl From<RegisterInfo> for RegisterInfoBuilder {
     fn from(r: RegisterInfo) -> Self {
         Self {
             name: Some(r.name),
-            address_offset: Some(r.address_offset),
-            alternate_group: r.alternate_group,
-            alternate_register: r.alternate_register,
-            derived_from: r.derived_from,
             display_name: r.display_name,
             description: r.description,
-            properties: RegisterProperties {
-                size: r.size,
-                access: r.access,
-                reset_value: r.reset_value,
-                reset_mask: r.reset_mask,
-            },
-            fields: r.fields,
-            write_constraint: r.write_constraint,
+            alternate_group: r.alternate_group,
+            alternate_register: r.alternate_register,
+            address_offset: Some(r.address_offset),
+            properties: r.properties,
             modified_write_values: r.modified_write_values,
+            write_constraint: r.write_constraint,
+            fields: r.fields,
+            derived_from: r.derived_from,
         }
     }
 }
@@ -126,8 +111,12 @@ impl RegisterInfoBuilder {
         self.name = Some(value);
         self
     }
-    pub fn address_offset(mut self, value: u32) -> Self {
-        self.address_offset = Some(value);
+    pub fn display_name(mut self, value: Option<String>) -> Self {
+        self.display_name = value;
+        self
+    }
+    pub fn description(mut self, value: Option<String>) -> Self {
+        self.description = value;
         self
     }
     pub fn alternate_group(mut self, value: Option<String>) -> Self {
@@ -138,16 +127,8 @@ impl RegisterInfoBuilder {
         self.alternate_register = value;
         self
     }
-    pub fn derived_from(mut self, value: Option<String>) -> Self {
-        self.derived_from = value;
-        self
-    }
-    pub fn description(mut self, value: Option<String>) -> Self {
-        self.description = value;
-        self
-    }
-    pub fn display_name(mut self, value: Option<String>) -> Self {
-        self.display_name = value;
+    pub fn address_offset(mut self, value: u32) -> Self {
+        self.address_offset = Some(value);
         self
     }
     pub fn properties(mut self, value: RegisterProperties) -> Self {
@@ -170,16 +151,20 @@ impl RegisterInfoBuilder {
         self.properties.reset_mask = value;
         self
     }
-    pub fn fields(mut self, value: Option<Vec<Field>>) -> Self {
-        self.fields = value;
+    pub fn modified_write_values(mut self, value: Option<ModifiedWriteValues>) -> Self {
+        self.modified_write_values = value;
         self
     }
     pub fn write_constraint(mut self, value: Option<WriteConstraint>) -> Self {
         self.write_constraint = value;
         self
     }
-    pub fn modified_write_values(mut self, value: Option<ModifiedWriteValues>) -> Self {
-        self.modified_write_values = value;
+    pub fn fields(mut self, value: Option<Vec<Field>>) -> Self {
+        self.fields = value;
+        self
+    }
+    pub fn derived_from(mut self, value: Option<String>) -> Self {
+        self.derived_from = value;
         self
     }
     pub fn build(self) -> Result<RegisterInfo> {
@@ -187,21 +172,18 @@ impl RegisterInfoBuilder {
             name: self
                 .name
                 .ok_or_else(|| BuildError::Uninitialized("name".to_string()))?,
+            display_name: self.display_name,
+            description: self.description,
+            alternate_group: self.alternate_group,
+            alternate_register: self.alternate_register,
             address_offset: self
                 .address_offset
                 .ok_or_else(|| BuildError::Uninitialized("address_offset".to_string()))?,
-            alternate_group: self.alternate_group,
-            alternate_register: self.alternate_register,
-            derived_from: self.derived_from,
-            description: self.description,
-            display_name: self.display_name,
-            size: self.properties.size,
-            access: self.properties.access,
-            reset_value: self.properties.reset_value,
-            reset_mask: self.properties.reset_mask,
-            fields: self.fields,
-            write_constraint: self.write_constraint,
+            properties: self.properties,
             modified_write_values: self.modified_write_values,
+            write_constraint: self.write_constraint,
+            fields: self.fields,
+            derived_from: self.derived_from,
         })
         .validate()
     }
@@ -248,13 +230,17 @@ impl RegisterInfo {
     fn _parse(tree: &Element, name: String) -> Result<Self> {
         RegisterInfoBuilder::default()
             .name(name)
+            .display_name(tree.get_child_text_opt("displayName")?)
+            .description(tree.get_child_text_opt("description")?)
             .alternate_group(tree.get_child_text_opt("alternateGroup")?)
             .alternate_register(tree.get_child_text_opt("alternateRegister")?)
-            .description(tree.get_child_text_opt("description")?)
-            .display_name(tree.get_child_text_opt("displayName")?)
-            .derived_from(tree.attributes.get("derivedFrom").map(|s| s.to_owned()))
             .address_offset(tree.get_child_u32("addressOffset")?)
             .properties(RegisterProperties::parse(tree)?)
+            .modified_write_values(parse::optional::<ModifiedWriteValues>(
+                "modifiedWriteValues",
+                tree,
+            )?)
+            .write_constraint(parse::optional::<WriteConstraint>("writeConstraint", tree)?)
             .fields({
                 if let Some(fields) = tree.get_child("fields") {
                     let fs: Result<Vec<_>, _> = fields
@@ -270,11 +256,7 @@ impl RegisterInfo {
                     None
                 }
             })
-            .write_constraint(parse::optional::<WriteConstraint>("writeConstraint", tree)?)
-            .modified_write_values(parse::optional::<ModifiedWriteValues>(
-                "modifiedWriteValues",
-                tree,
-            )?)
+            .derived_from(tree.attributes.get("derivedFrom").map(|s| s.to_owned()))
             .build()
     }
 }
@@ -283,29 +265,20 @@ impl Encode for RegisterInfo {
     type Error = anyhow::Error;
 
     fn encode(&self) -> Result<Element> {
-        let mut elem = Element {
-            prefix: None,
-            namespace: None,
-            namespaces: None,
-            name: String::from("register"),
-            attributes: HashMap::new(),
-            children: vec![
-                new_element("name", Some(self.name.clone())),
-                new_element(
-                    "addressOffset",
-                    Some(format!("0x{:x}", self.address_offset)),
-                ),
-            ],
-            text: None,
-        };
-        if let Some(v) = &self.description {
-            elem.children
-                .push(new_element("description", Some(v.clone())));
-        }
+        let mut elem = new_element("register", None);
+        elem.children
+            .push(new_element("name", Some(self.name.clone())));
+
         if let Some(v) = &self.display_name {
             elem.children
                 .push(new_element("displayName", Some(v.clone())));
         }
+
+        if let Some(v) = &self.description {
+            elem.children
+                .push(new_element("description", Some(v.clone())));
+        }
+
         if let Some(v) = &self.alternate_group {
             elem.children
                 .push(new_element("alternateGroup", Some(v.to_string())));
@@ -316,28 +289,20 @@ impl Encode for RegisterInfo {
                 .push(new_element("alternateRegister", Some(v.to_string())));
         }
 
-        if let Some(v) = &self.derived_from {
-            elem.attributes
-                .insert(String::from("derivedFrom"), v.to_string());
+        elem.children.push(new_element(
+            "addressOffset",
+            Some(format!("0x{:X}", self.address_offset)),
+        ));
+
+        elem.children.extend(self.properties.encode()?);
+
+        if let Some(v) = &self.modified_write_values {
+            elem.children.push(v.encode()?);
         }
 
-        if let Some(v) = &self.size {
-            elem.children.push(new_element("size", Some(v.to_string())));
-        };
-
-        if let Some(v) = &self.access {
+        if let Some(v) = &self.write_constraint {
             elem.children.push(v.encode()?);
-        };
-
-        if let Some(v) = &self.reset_value {
-            elem.children
-                .push(new_element("resetValue", Some(format!("0x{:08.x}", v))));
-        };
-
-        if let Some(v) = &self.reset_mask {
-            elem.children
-                .push(new_element("resetMask", Some(format!("0x{:08.x}", v))));
-        };
+        }
 
         if let Some(v) = &self.fields {
             let children = v
@@ -356,15 +321,12 @@ impl Encode for RegisterInfo {
                 };
                 elem.children.push(fields);
             }
-        };
+        }
 
-        if let Some(v) = &self.write_constraint {
-            elem.children.push(v.encode()?);
-        };
-
-        if let Some(v) = &self.modified_write_values {
-            elem.children.push(v.encode()?);
-        };
+        if let Some(v) = &self.derived_from {
+            elem.attributes
+                .insert(String::from("derivedFrom"), v.to_string());
+        }
 
         Ok(elem)
     }

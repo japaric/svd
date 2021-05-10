@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::elementext::ElementExt;
 use crate::parse;
 use xmltree::Element;
@@ -140,15 +138,9 @@ impl Encode for EnumeratedValue {
     type Error = anyhow::Error;
 
     fn encode(&self) -> Result<Element> {
-        let mut base = Element {
-            prefix: None,
-            namespace: None,
-            namespaces: None,
-            name: String::from("enumeratedValue"),
-            attributes: HashMap::new(),
-            children: vec![new_element("name", Some(self.name.clone()))],
-            text: None,
-        };
+        let mut base = new_element("enumeratedValue", None);
+        base.children
+            .push(new_element("name", Some(self.name.clone())));
 
         if let Some(d) = &self.description {
             let s = (*d).clone();
@@ -157,7 +149,7 @@ impl Encode for EnumeratedValue {
 
         if let Some(v) = &self.value {
             base.children
-                .push(new_element("value", Some(format!("0x{:08.x}", *v))));
+                .push(new_element("value", Some(format!("{}", v))));
         };
 
         if let Some(v) = &self.is_default {
@@ -189,7 +181,7 @@ mod tests {
                 <enumeratedValue>
                     <name>WS0</name>
                     <description>Zero wait-states inserted in fetch or read transfers</description>
-                    <value>0x00000000</value>
+                    <value>0</value>
                 </enumeratedValue>
             ",
         )];

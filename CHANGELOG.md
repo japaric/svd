@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+- [breaking-change] change encode format of some numbers to be
+  more compatible with STM vendor's SVDs
+- [breaking-change] resort tags when encode
+- [breaking-change] Use `RegisterProperties` in `RegisterInfo`
+  instead of separate `size`, `access`, `reset_value` and `reset_mask`
+
 ## [v0.10.2] - 2021-04-30
 
 - Allow single valued `dimIndex`
