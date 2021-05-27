@@ -1,19 +1,7 @@
 use core::ops::{Deref, DerefMut};
 
-use xmltree::Element;
+use super::{DimElement, RegisterCluster, RegisterInfo};
 
-use crate::types::Parse;
-
-use crate::elementext::ElementExt;
-
-use crate::encode::Encode;
-use crate::error::*;
-use crate::svd::{
-    dimelement::DimElement, registercluster::RegisterCluster, registerinfo::RegisterInfo,
-};
-use anyhow::Result;
-
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Register {
     Single(RegisterInfo),
@@ -37,81 +25,6 @@ impl DerefMut for Register {
             Register::Single(info) => info,
             Register::Array(info, _) => info,
         }
-    }
-}
-
-impl Parse for Register {
-    type Object = Self;
-    type Error = anyhow::Error;
-
-    fn parse(tree: &Element) -> Result<Self> {
-        assert_eq!(tree.name, "register");
-
-        let info = RegisterInfo::parse(tree)?;
-
-        if tree.get_child("dimIncrement").is_some() {
-            let array_info = DimElement::parse(tree)?;
-            check_has_placeholder(&info.name, "register")?;
-            if let Some(indices) = &array_info.dim_index {
-                assert_eq!(array_info.dim as usize, indices.len())
-            }
-            Ok(Register::Array(info, array_info))
-        } else {
-            Ok(Register::Single(info))
-        }
-    }
-}
-
-impl Encode for Register {
-    type Error = anyhow::Error;
-
-    fn encode(&self) -> Result<Element> {
-        match self {
-            Register::Single(info) => info.encode(),
-            Register::Array(info, array_info) => {
-                // TODO: is this correct? probably not, need tests
-                let mut base = info.encode()?;
-                base.merge(&array_info.encode()?);
-                Ok(base)
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::dimelement::DimElementBuilder;
-    use crate::registerinfo::RegisterInfoBuilder;
-
-    use crate::run_test;
-    #[test]
-    fn decode_encode() {
-        let tests = vec![(
-            Register::Array(
-                RegisterInfoBuilder::default()
-                    .name("MODE%s".to_string())
-                    .address_offset(8)
-                    .build()
-                    .unwrap(),
-                DimElementBuilder::default()
-                    .dim(2)
-                    .dim_increment(4)
-                    .dim_index(Some(vec!["10".to_string(), "20".to_string()]))
-                    .build()
-                    .unwrap(),
-            ),
-            "
-            <register>
-              <name>MODE%s</name>
-              <addressOffset>0x8</addressOffset>
-              <dim>2</dim>
-              <dimIncrement>4</dimIncrement>
-              <dimIndex>10,20</dimIndex>
-            </register>
-            ",
-        )];
-        run_test::<Register>(&tests[..]);
     }
 }
 
@@ -160,5 +73,51 @@ impl<'a> std::iter::Iterator for RegIterMut<'a> {
             }
         }
         None
+    }
+}
+
+#[cfg(feature = "serde")]
+mod ser_de {
+    use super::*;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct RegisterArray {
+        #[cfg_attr(feature = "serde", serde(flatten))]
+        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+        dim: Option<DimElement>,
+        #[cfg_attr(feature = "serde", serde(flatten))]
+        info: RegisterInfo,
+    }
+
+    impl Serialize for Register {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            match self {
+                Register::Single(info) => info.serialize(serializer),
+                Register::Array(info, dim) => RegisterArray {
+                    dim: Some(dim.clone()),
+                    info: info.clone(),
+                }
+                .serialize(serializer),
+            }
+        }
+    }
+
+    impl<'de> Deserialize<'de> for Register {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let RegisterArray { dim, info } = RegisterArray::deserialize(deserializer)?;
+            if let Some(dim) = dim {
+                Ok(Register::Array(info, dim))
+            } else {
+                Ok(Register::Single(info))
+            }
+        }
     }
 }

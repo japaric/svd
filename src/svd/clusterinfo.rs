@@ -1,19 +1,17 @@
-use crate::elementext::ElementExt;
-use xmltree::Element;
-
-use crate::types::Parse;
-
-use crate::encode::{Encode, EncodeChildren};
-use crate::new_element;
-
-use crate::error::*;
-use crate::svd::{
+use super::{
     register::{RegIter, RegIterMut},
-    registercluster::RegisterCluster,
-    registerproperties::RegisterProperties,
+    BuildError, RegisterCluster, RegisterProperties, SvdError,
 };
 
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    #[cfg(feature = "strict")]
+    #[error("Cluster must contain at least one Register or Cluster")]
+    EmptyCluster,
+}
+
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ClusterInfo {
@@ -21,51 +19,54 @@ pub struct ClusterInfo {
     /// Cluster names are required to be unique within the scope of a peripheral
     pub name: String,
 
+    /// String describing the details of the register cluster
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub description: Option<String>,
+
+    // alternateCluster
+    /// Specify the struct type name created in the device header file
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub header_struct_name: Option<String>,
+
     /// Cluster address relative to the `baseAddress` of the peripheral
     pub address_offset: u32,
+
+    /// Default properties for all registers
+    #[cfg_attr(feature = "serde", serde(flatten))]
+    pub default_register_properties: RegisterProperties,
+
+    pub children: Vec<RegisterCluster>,
 
     /// Specify the cluster name from which to inherit data.
     /// Elements specified subsequently override inherited values
     #[cfg_attr(feature = "serde", serde(default))]
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub derived_from: Option<String>,
-
-    /// String describing the details of the register cluster
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub description: Option<String>,
-
-    /// Specify the struct type name created in the device header file
-    #[cfg_attr(feature = "serde", serde(default))]
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub header_struct_name: Option<String>,
-
-    pub default_register_properties: RegisterProperties,
-
-    pub children: Vec<RegisterCluster>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ClusterInfoBuilder {
     name: Option<String>,
-    address_offset: Option<u32>,
-    derived_from: Option<String>,
     description: Option<String>,
     header_struct_name: Option<String>,
+    address_offset: Option<u32>,
     default_register_properties: RegisterProperties,
     children: Option<Vec<RegisterCluster>>,
+    derived_from: Option<String>,
 }
 
 impl From<ClusterInfo> for ClusterInfoBuilder {
     fn from(c: ClusterInfo) -> Self {
         Self {
             name: Some(c.name),
-            address_offset: Some(c.address_offset),
-            derived_from: c.derived_from,
             description: c.description,
             header_struct_name: c.header_struct_name,
+            address_offset: Some(c.address_offset),
             default_register_properties: c.default_register_properties,
             children: Some(c.children),
+            derived_from: c.derived_from,
         }
     }
 }
@@ -73,14 +74,6 @@ impl From<ClusterInfo> for ClusterInfoBuilder {
 impl ClusterInfoBuilder {
     pub fn name(mut self, value: String) -> Self {
         self.name = Some(value);
-        self
-    }
-    pub fn address_offset(mut self, value: u32) -> Self {
-        self.address_offset = Some(value);
-        self
-    }
-    pub fn derived_from(mut self, value: Option<String>) -> Self {
-        self.derived_from = value;
         self
     }
     pub fn description(mut self, value: Option<String>) -> Self {
@@ -91,6 +84,10 @@ impl ClusterInfoBuilder {
         self.header_struct_name = value;
         self
     }
+    pub fn address_offset(mut self, value: u32) -> Self {
+        self.address_offset = Some(value);
+        self
+    }
     pub fn default_register_properties(mut self, value: RegisterProperties) -> Self {
         self.default_register_properties = value;
         self
@@ -99,73 +96,51 @@ impl ClusterInfoBuilder {
         self.children = Some(value);
         self
     }
-    pub fn build(self) -> Result<ClusterInfo> {
+    pub fn derived_from(mut self, value: Option<String>) -> Self {
+        self.derived_from = value;
+        self
+    }
+    pub fn build(self) -> Result<ClusterInfo, SvdError> {
         (ClusterInfo {
             name: self
                 .name
                 .ok_or_else(|| BuildError::Uninitialized("name".to_string()))?,
+            description: self.description,
+            header_struct_name: self.header_struct_name,
             address_offset: self
                 .address_offset
                 .ok_or_else(|| BuildError::Uninitialized("address_offset".to_string()))?,
-            derived_from: self.derived_from,
-            description: self.description,
-            header_struct_name: self.header_struct_name,
             default_register_properties: self.default_register_properties,
             children: self
                 .children
                 .ok_or_else(|| BuildError::Uninitialized("children".to_string()))?,
+            derived_from: self.derived_from,
         })
         .validate()
     }
 }
 
 impl ClusterInfo {
+    pub fn builder() -> ClusterInfoBuilder {
+        ClusterInfoBuilder::default()
+    }
+
     #[allow(clippy::unnecessary_wraps)]
-    fn validate(self) -> Result<Self> {
+    fn validate(self) -> Result<Self, SvdError> {
         #[cfg(feature = "strict")]
-        check_dimable_name(&self.name, "name")?;
+        super::check_dimable_name(&self.name, "name")?;
         if let Some(_name) = self.derived_from.as_ref() {
             #[cfg(feature = "strict")]
-            check_derived_name(_name, "derivedFrom")?;
+            super::check_derived_name(_name, "derivedFrom")?;
         } else if self.children.is_empty() {
             #[cfg(feature = "strict")]
-            return Err(SVDError::EmptyCluster)?;
+            return Err(Error::EmptyCluster)?;
         }
         Ok(self)
     }
 }
 
-impl Parse for ClusterInfo {
-    type Object = Self;
-    type Error = anyhow::Error;
-
-    fn parse(tree: &Element) -> Result<Self> {
-        let name = tree.get_child_text("name")?;
-        Self::_parse(tree, name.clone()).with_context(|| format!("In cluster `{}`", name))
-    }
-}
-
 impl ClusterInfo {
-    fn _parse(tree: &Element, name: String) -> Result<Self> {
-        ClusterInfoBuilder::default()
-            .name(name)
-            .derived_from(tree.attributes.get("derivedFrom").map(|s| s.to_owned()))
-            .description(tree.get_child_text_opt("description")?)
-            .header_struct_name(tree.get_child_text_opt("headerStructName")?)
-            .address_offset(tree.get_child_u32("addressOffset")?)
-            .default_register_properties(RegisterProperties::parse(tree)?)
-            .children({
-                let children: Result<Vec<_>, _> = tree
-                    .children
-                    .iter()
-                    .filter(|t| t.name == "register" || t.name == "cluster")
-                    .map(RegisterCluster::parse)
-                    .collect();
-                children?
-            })
-            .build()
-    }
-
     /// returns iterator over all registers cluster contains
     pub fn reg_iter(&self) -> RegIter {
         let mut rem: Vec<&RegisterCluster> = Vec::with_capacity(self.children.len());
@@ -184,40 +159,3 @@ impl ClusterInfo {
         RegIterMut { rem }
     }
 }
-
-impl Encode for ClusterInfo {
-    type Error = anyhow::Error;
-
-    fn encode(&self) -> Result<Element> {
-        let mut e = new_element("cluster", None);
-
-        if let Some(v) = &self.derived_from {
-            e.attributes
-                .insert(String::from("derivedFrom"), v.to_string());
-        }
-
-        e.children
-            .push(new_element("description", self.description.clone()));
-
-        if let Some(v) = &self.header_struct_name {
-            e.children
-                .push(new_element("headerStructName", Some(v.clone())));
-        }
-
-        e.children.push(new_element(
-            "addressOffset",
-            Some(format!("{}", self.address_offset)),
-        ));
-
-        e.children
-            .extend(self.default_register_properties.encode()?);
-
-        for c in &self.children {
-            e.children.push(c.encode()?);
-        }
-
-        Ok(e)
-    }
-}
-
-// TODO: test ClusterInfo encode and decode

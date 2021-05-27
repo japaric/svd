@@ -3,12 +3,8 @@
 
 use xmltree::Element;
 
-pub use crate::encode::Encode;
-pub use crate::parse::optional as parse_optional;
-pub use crate::parse::Parse;
-
-use crate::elementext::ElementExt;
-use crate::error::*;
+use super::elementext::ElementExt;
+use super::{Context, Parse, Result, SVDError};
 
 macro_rules! unwrap {
     ($e:expr) => {

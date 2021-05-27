@@ -1,16 +1,6 @@
+use super::{DimElement, FieldInfo};
 use core::ops::{Deref, DerefMut};
 
-use xmltree::Element;
-
-use crate::types::Parse;
-
-use crate::elementext::ElementExt;
-
-use crate::encode::Encode;
-use crate::error::*;
-use crate::svd::{dimelement::DimElement, fieldinfo::FieldInfo};
-
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Field {
     Single(FieldInfo),
@@ -37,84 +27,48 @@ impl DerefMut for Field {
     }
 }
 
-impl Parse for Field {
-    type Object = Self;
-    type Error = anyhow::Error;
-
-    fn parse(tree: &Element) -> Result<Self> {
-        assert_eq!(tree.name, "field");
-
-        let info = FieldInfo::parse(tree)?;
-
-        if tree.get_child("dimIncrement").is_some() {
-            let array_info = DimElement::parse(tree)?;
-            check_has_placeholder(&info.name, "field")?;
-            if let Some(indices) = &array_info.dim_index {
-                assert_eq!(array_info.dim as usize, indices.len())
-            }
-            Ok(Field::Array(info, array_info))
-        } else {
-            Ok(Field::Single(info))
-        }
-    }
-}
-
-impl Encode for Field {
-    type Error = anyhow::Error;
-
-    fn encode(&self) -> Result<Element> {
-        match self {
-            Field::Single(info) => info.encode(),
-            Field::Array(info, array_info) => {
-                // TODO: is this correct? probably not, need tests
-                let mut base = info.encode()?;
-                base.merge(&array_info.encode()?);
-                Ok(base)
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
+#[cfg(feature = "serde")]
+mod ser_de {
     use super::*;
-    use crate::bitrange::{BitRange, BitRangeType};
-    use crate::dimelement::DimElementBuilder;
-    use crate::fieldinfo::FieldInfoBuilder;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    use crate::run_test;
-    #[test]
-    fn decode_encode() {
-        let tests = vec![(
-            Field::Array(
-                FieldInfoBuilder::default()
-                    .name("MODE%s".to_string())
-                    .derived_from(Some("other_field".to_string()))
-                    .bit_range(BitRange {
-                        offset: 24,
-                        width: 2,
-                        range_type: BitRangeType::OffsetWidth,
-                    })
-                    .build()
-                    .unwrap(),
-                DimElementBuilder::default()
-                    .dim(2)
-                    .dim_increment(4)
-                    .dim_index(Some(vec!["10".to_string(), "20".to_string()]))
-                    .build()
-                    .unwrap(),
-            ),
-            "
-            <field derivedFrom=\"other_field\">
-              <name>MODE%s</name>
-              <bitOffset>24</bitOffset>
-              <bitWidth>2</bitWidth>
-              <dim>2</dim>
-              <dimIncrement>4</dimIncrement>
-              <dimIndex>10,20</dimIndex>
-            </field>
-            ",
-        )];
-        run_test::<Field>(&tests[..]);
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct FieldArray {
+        #[cfg_attr(feature = "serde", serde(flatten))]
+        #[cfg_attr(feature = "serde", serde(default))]
+        #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+        dim: Option<DimElement>,
+        #[cfg_attr(feature = "serde", serde(flatten))]
+        info: FieldInfo,
+    }
+
+    impl Serialize for Field {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            match self {
+                Field::Single(info) => info.serialize(serializer),
+                Field::Array(info, dim) => FieldArray {
+                    dim: Some(dim.clone()),
+                    info: info.clone(),
+                }
+                .serialize(serializer),
+            }
+        }
+    }
+
+    impl<'de> Deserialize<'de> for Field {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let FieldArray { dim, info } = FieldArray::deserialize(deserializer)?;
+            if let Some(dim) = dim {
+                Ok(Field::Array(info, dim))
+            } else {
+                Ok(Field::Single(info))
+            }
+        }
     }
 }

@@ -1,10 +1,9 @@
-use xmltree::Element;
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    #[error("bitRange width of 0 does not make sense")]
+    ZeroWidth,
+}
 
-use crate::error::*;
-use crate::new_element;
-use crate::types::Parse;
-
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BitRange {
     /// Value defining the position of the least significant bit of the field within the register
@@ -16,16 +15,6 @@ pub struct BitRange {
     pub range_type: BitRangeType,
 }
 
-impl BitRange {
-    pub fn lsb(&self) -> u32 {
-        self.offset
-    }
-    pub fn msb(&self) -> u32 {
-        self.offset + self.width - 1
-    }
-}
-
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BitRangeType {
     BitRange,
@@ -33,165 +22,153 @@ pub enum BitRangeType {
     MsbLsb,
 }
 
-impl Parse for BitRange {
-    type Object = Self;
-    type Error = anyhow::Error;
-
-    fn parse(tree: &Element) -> Result<Self> {
-        let (end, start, range_type): (u32, u32, BitRangeType) = if let Some(range) =
-            tree.get_child("bitRange")
-        {
-            let text = range
-                .text
-                .as_ref()
-                .ok_or_else(|| SVDError::InvalidBitRange(tree.clone(), InvalidBitRange::Empty))?;
-            if !text.starts_with('[') {
-                return Err(
-                    SVDError::InvalidBitRange(tree.clone(), InvalidBitRange::Syntax).into(),
-                );
-                // TODO: Maybe have a MissingOpen/MissingClosing variant
-            }
-            if !text.ends_with(']') {
-                return Err(
-                    SVDError::InvalidBitRange(tree.clone(), InvalidBitRange::Syntax).into(),
-                );
-                // TODO: Maybe have a MissingOpen/MissingClosing variant
-            }
-
-            let mut parts = text[1..text.len() - 1].split(':');
-            (
-                parts
-                    .next()
-                    .ok_or_else(|| {
-                        SVDError::InvalidBitRange(tree.clone(), InvalidBitRange::Syntax)
-                    })?
-                    .parse::<u32>()
-                    .with_context(|| {
-                        SVDError::InvalidBitRange(tree.clone(), InvalidBitRange::ParseError)
-                    })?,
-                parts
-                    .next()
-                    .ok_or_else(|| {
-                        SVDError::InvalidBitRange(tree.clone(), InvalidBitRange::Syntax)
-                    })?
-                    .parse::<u32>()
-                    .with_context(|| {
-                        SVDError::InvalidBitRange(tree.clone(), InvalidBitRange::ParseError)
-                    })?,
-                BitRangeType::BitRange,
-            )
-        // TODO: Consider matching instead so we can say which of these tags are missing
-        } else if let (Some(lsb), Some(msb)) = (tree.get_child("lsb"), tree.get_child("msb")) {
-            (
-                // TODO: `u32::parse` should not hide it's errors
-                u32::parse(msb).with_context(|| {
-                    SVDError::InvalidBitRange(tree.clone(), InvalidBitRange::MsbLsb)
-                })?,
-                u32::parse(lsb).with_context(|| {
-                    SVDError::InvalidBitRange(tree.clone(), InvalidBitRange::MsbLsb)
-                })?,
-                BitRangeType::MsbLsb,
-            )
-        } else if let (Some(offset), Some(width)) =
-            (tree.get_child("bitOffset"), tree.get_child("bitWidth"))
-        {
-            // Special case because offset and width are directly provided
-            // (ie. do not need to be calculated as in the final step)
-            return Ok(BitRange {
-                // TODO: capture that error comes from offset/width tag
-                // TODO: `u32::parse` should not hide it's errors
-                offset: u32::parse(offset).with_context(|| {
-                    SVDError::InvalidBitRange(tree.clone(), InvalidBitRange::ParseError)
-                })?,
-                width: u32::parse(width).with_context(|| {
-                    SVDError::InvalidBitRange(tree.clone(), InvalidBitRange::ParseError)
-                })?,
-                range_type: BitRangeType::OffsetWidth,
-            });
-        } else {
-            return Err(SVDError::InvalidBitRange(tree.clone(), InvalidBitRange::Syntax).into());
-        };
-
-        Ok(Self {
-            offset: start,
-            width: end - start + 1,
-            range_type,
+impl BitRange {
+    pub fn lsb(&self) -> u32 {
+        self.offset
+    }
+    pub fn msb(&self) -> u32 {
+        self.offset + self.width - 1
+    }
+    pub fn bit_range(&self) -> String {
+        format!("[{}:{}]", self.msb(), self.lsb())
+    }
+    pub fn from_offset_width(offset: u32, width: u32) -> Self {
+        Self {
+            offset,
+            width,
+            range_type: BitRangeType::OffsetWidth,
+        }
+    }
+    pub fn from_msb_lsb(msb: u32, lsb: u32) -> Self {
+        Self {
+            offset: lsb,
+            width: msb - lsb + 1,
+            range_type: BitRangeType::MsbLsb,
+        }
+    }
+    pub fn from_bit_range(text: &str) -> Option<Self> {
+        if !text.starts_with('[') || !text.ends_with(']') {
+            return None;
+        }
+        let mut parts = text[1..text.len() - 1].split(':');
+        let msb = parts.next()?.parse::<u32>().ok()?;
+        let lsb = parts.next()?.parse::<u32>().ok()?;
+        Some(Self {
+            offset: lsb,
+            width: msb - lsb + 1,
+            range_type: BitRangeType::BitRange,
         })
     }
 }
 
-impl BitRange {
-    // TODO: Encode method differs from Encode trait as it acts on a set of possible children, create an interface or decide how to better do this
-    pub fn encode(&self) -> Result<Vec<Element>> {
-        match self.range_type {
-            BitRangeType::BitRange => Ok(vec![new_element(
-                "bitRange",
-                Some(format!("[{}:{}]", self.msb(), self.lsb())),
-            )]),
-            BitRangeType::MsbLsb => Ok(vec![
-                new_element("lsb", Some(format!("{}", self.lsb()))),
-                new_element("msb", Some(format!("{}", self.msb()))),
-            ]),
-            BitRangeType::OffsetWidth => Ok(vec![
-                new_element("bitOffset", Some(format!("{}", self.offset))),
-                new_element("bitWidth", Some(format!("{}", self.width))),
-            ]),
+#[cfg(feature = "serde")]
+mod ser_de {
+    use super::*;
+    use serde::ser::SerializeMap;
+    use serde::{de::MapAccess, de::Visitor, Deserialize, Deserializer, Serialize, Serializer};
+    use std::fmt;
+
+    impl Serialize for BitRange {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            match self.range_type {
+                BitRangeType::BitRange => {
+                    let mut seq = serializer.serialize_map(Some(4))?;
+                    seq.serialize_entry("bitRange", &self.bit_range())?;
+                    seq.end()
+                }
+                BitRangeType::OffsetWidth => {
+                    let mut seq = serializer.serialize_map(Some(2))?;
+                    seq.serialize_entry("bitOffset", &self.offset)?;
+                    seq.serialize_entry("bitWidth", &self.width)?;
+                    seq.end()
+                }
+                BitRangeType::MsbLsb => {
+                    let mut seq = serializer.serialize_map(Some(2))?;
+                    seq.serialize_entry("lsb", &self.lsb())?;
+                    seq.serialize_entry("msb", &self.msb())?;
+                    seq.end()
+                }
+            }
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    impl<'de> Deserialize<'de> for BitRange {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserializer.deserialize_map(CustomVisitor)
+        }
+    }
 
-    #[test]
-    fn decode_encode() {
-        let types = vec![
-            (
-                BitRange {
-                    offset: 16,
-                    width: 4,
-                    range_type: BitRangeType::BitRange,
-                },
-                String::from(
-                    "
-                <fake><bitRange>[19:16]</bitRange></fake>
-            ",
-                ),
-            ),
-            (
-                BitRange {
-                    offset: 16,
-                    width: 4,
-                    range_type: BitRangeType::OffsetWidth,
-                },
-                String::from(
-                    "
-                <fake><bitOffset>16</bitOffset><bitWidth>4</bitWidth></fake>
-            ",
-                ),
-            ),
-            (
-                BitRange {
-                    offset: 16,
-                    width: 4,
-                    range_type: BitRangeType::MsbLsb,
-                },
-                String::from(
-                    "
-                <fake><lsb>16</lsb><msb>19</msb></fake>
-            ",
-                ),
-            ),
-        ];
+    struct CustomVisitor;
 
-        for (a, s) in types {
-            let tree1 = Element::parse(s.as_bytes()).unwrap();
-            let value = BitRange::parse(&tree1).unwrap();
-            assert_eq!(value, a, "Parsing `{}` expected `{:?}`", s, a);
-            let mut tree2 = new_element("fake", None);
-            tree2.children = value.encode().unwrap();
-            assert_eq!(tree1, tree2, "Encoding {:?} expected {}", a, s);
+    impl<'de> Visitor<'de> for CustomVisitor {
+        type Value = BitRange;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            write!(
+                formatter,
+                "a map with keys 'bitRange' or 'bitOffset' and 'bitWidth' or 'lsb' and 'msb'"
+            )
+        }
+
+        fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+        where
+            M: MapAccess<'de>,
+        {
+            match map.next_key::<&str>()? {
+                Some(k) if k == "bitRange" => {
+                    let s: String = map.next_value()?;
+                    BitRange::from_bit_range(&s)
+                        .ok_or_else(|| serde::de::Error::custom(&format!("Can't parse bitRange")))
+                }
+                Some(k) if k == "bitOffset" || k == "bitWidth" => {
+                    let offset;
+                    let width;
+                    if k == "bitOffset" {
+                        offset = map.next_value()?;
+                        width = match map.next_key::<&str>()? {
+                            Some(k) if k == "bitWidth" => map.next_value()?,
+                            _ => {
+                                return Err(serde::de::Error::custom(&format!("Missing bitWidth")))
+                            }
+                        };
+                    } else {
+                        width = map.next_value()?;
+                        offset = match map.next_key::<&str>()? {
+                            Some(k) if k == "bitOffset" => map.next_value()?,
+                            _ => {
+                                return Err(serde::de::Error::custom(&format!("Missing bitOffset")))
+                            }
+                        };
+                    }
+                    Ok(BitRange::from_offset_width(offset, width))
+                }
+                Some(k) if k == "lsb" || k == "msb" => {
+                    let msb;
+                    let lsb;
+                    if k == "msb" {
+                        msb = map.next_value()?;
+                        lsb = match map.next_key::<&str>()? {
+                            Some(k) if k == "lsb" => map.next_value()?,
+                            _ => return Err(serde::de::Error::custom(&format!("Missing lsb"))),
+                        };
+                    } else {
+                        lsb = map.next_value()?;
+                        msb = match map.next_key::<&str>()? {
+                            Some(k) if k == "msb" => map.next_value()?,
+                            _ => return Err(serde::de::Error::custom(&format!("Missing msb"))),
+                        };
+                    }
+                    Ok(BitRange::from_msb_lsb(msb, lsb))
+                }
+                Some(k) => Err(serde::de::Error::custom(&format!("Invalid key: {}", k))),
+                None => Err(serde::de::Error::custom(&format!("Missing bitRange"))),
+            }
         }
     }
 }

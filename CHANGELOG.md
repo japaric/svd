@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+- Added custom `serde` (de)serializers for `BitRange`, `Register`,
+  `Cluster` and `Field`. `camelCase` and `kebab-case` are used
+  where it's needed to be more like SVD.
+- [breaking-change] `Parse`, `Encode` implementation are moved
+  in separate modules, same with tests. Builders and `Encode`'s
+  use enum errors now instead of dynamical `anyhow`.
+- [breaking-change] change encode format of some numbers to be
+  more compatible with STM vendor's SVDs
+- [breaking-change] resort tags when encode
+- [breaking-change] Use `RegisterProperties` in `RegisterInfo`
+  instead of separate `size`, `access`, `reset_value` and `reset_mask`
+
 ## [v0.10.2] - 2021-04-30
 
 - Allow single valued `dimIndex`
